@@ -1,98 +1,149 @@
-export const maxDuration = 60;
-import { GoogleGenAI } from "@google/genai";
 
-const FALLBACK_MODELS = [
-  "gemini-3.5-flash-lite",
-  "gemini-3.5-flash",
-];
-function getApiKey() {
+      
+    
+     import { GoogleGenAI } from "@google/genai";
+
+export const maxDuration = 60;
+
+const MODEL = "gemini-3.5-flash-lite";
+
+function getApiKey(): string {
   const key = process.env.GEMINI_API_KEY;
+
   if (!key) {
     throw new Error("GEMINI_API_KEY is not configured in Vercel.");
   }
+
   return key;
 }
 
-async function reflect(prompt: string, history: any[] = []) {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+function createAI() {
+  return new GoogleGenAI({
+    apiKey: getApiKey(),
+    httpOptions: {
+      timeout: 15000,
+      retryOptions: {
+        attempts: 1,
+      },
+    },
+  });
+}
+
+async function reflect(
+  prompt: string,
+  history: Array<{ role: string; text: string }> = []
+) {
+  const ai = createAI();
 
   const contents = [
-    ...history.slice(-6).map((m) => ({
-      role: m.role === "assistant" || m.role === "model" ? "model" : "user",
-      parts: [{ text: String(m.text).slice(0, 2000) }],
+    ...history.slice(-4).map((message) => ({
+      role:
+        message.role === "assistant" || message.role === "model"
+          ? "model"
+          : "user",
+      parts: [
+        {
+          text: String(message.text).slice(0, 1500),
+        },
+      ],
     })),
     {
       role: "user",
-      parts: [{ text: prompt }],
+      parts: [
+        {
+          text: prompt,
+        },
+      ],
     },
   ];
 
-  let lastError: any;
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents,
+    config: {
+      systemInstruction:
+        "You are an empathetic and thoughtful personal journaling companion. " +
+        "Give a warm, concise reflection on the user's journal entry. " +
+        "Validate emotions when appropriate, highlight one useful insight, " +
+        "and end with one gentle reflective question. " +
+        "Keep the response under 150 words.",
+      maxOutputTokens: 300,
+      thinkingConfig: {
+        thinkingLevel: "minimal",
+      },
+    },
+  });
 
-  for (const model of FALLBACK_MODELS) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-  systemInstruction:
-    "You are an empathetic, supportive and thoughtful personal journaling companion. Give warm, concise reflective feedback. Ask 1-2 gentle follow-up questions or offer a constructive perspective. If the user celebrates, celebrate with them. If stressed, provide calm validation.",
-  maxOutputTokens: 600,
-},
-      });
-
-      if (response.text) {
-        return response.text;
-      }
-    } catch (e: any) {
-  lastError = e;
-
-  const status = e?.status ?? e?.code;
-
-  if (status === 503 || status === 429) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-}
+  if (!response.text) {
+    throw new Error("Gemini returned an empty reflection.");
   }
 
-  throw lastError || new Error("Gemini generation failed.");
+  return response.text;
 }
 
-async function actionPlan(prompt: string, reflection: string) {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+async function actionPlan(
+  prompt: string,
+  reflection: string
+) {
+  const ai = createAI();
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL,
     contents: [
       {
         role: "user",
         parts: [
           {
-            text: `Create a concise action plan from this journal entry and reflection.
-
-Journal:
-${prompt}
-
-Reflection:
-${reflection}`,
+            text:
+              `Create a concise action plan from this journal entry and reflection.\n\n` +
+              `Journal:\n${prompt}\n\n` +
+              `Reflection:\n${reflection}`,
           },
         ],
       },
     ],
     config: {
       systemInstruction:
-        'Return ONLY valid JSON with exactly these keys: "keyInsight", "practicalNextStep", "smallActionToday", "goalToRevisitLater".',
-      temperature: 0.5,
-      maxOutputTokens: 800,
+        'Return ONLY valid JSON with exactly these four string keys: ' +
+        '"keyInsight", "practicalNextStep", "smallActionToday", "goalToRevisitLater".',
+      maxOutputTokens: 400,
+      thinkingConfig: {
+        thinkingLevel: "minimal",
+      },
       responseMimeType: "application/json",
     },
   });
 
   if (!response.text) {
-    throw new Error("No action plan was generated.");
+    throw new Error("Gemini returned an empty action plan.");
   }
 
-  return JSON.parse(response.text);
+  let cleanText = response.text.trim();
+
+  if (cleanText.startsWith("```")) {
+    cleanText = cleanText
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+  }
+
+  const parsed = JSON.parse(cleanText);
+
+  if (
+    typeof parsed.keyInsight !== "string" ||
+    typeof parsed.practicalNextStep !== "string" ||
+    typeof parsed.smallActionToday !== "string" ||
+    typeof parsed.goalToRevisitLater !== "string"
+  ) {
+    throw new Error("Gemini returned an invalid action plan.");
+  }
+
+  return {
+    keyInsight: parsed.keyInsight.trim(),
+    practicalNextStep: parsed.practicalNextStep.trim(),
+    smallActionToday: parsed.smallActionToday.trim(),
+    goalToRevisitLater: parsed.goalToRevisitLater.trim(),
+  };
 }
 
 export default async function handler(req: any, res: any) {
@@ -108,41 +159,92 @@ export default async function handler(req: any, res: any) {
     }
 
     if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
+      return res.status(405).json({
+        error: "Method not allowed",
+      });
     }
 
     if (path === "journal/reflect") {
-      const { prompt, history } = req.body || {};
+      const body = req.body || {};
+      const prompt = body.prompt;
+      const history = body.history;
 
-      if (!prompt || typeof prompt !== "string") {
+      if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
         return res.status(400).json({
           error: "A valid journal entry prompt is required.",
         });
       }
 
-      const reflection = await reflect(prompt.trim(), Array.isArray(history) ? history : []);
+      if (prompt.length > 5000) {
+        return res.status(400).json({
+          error: "Journal entry is too long.",
+        });
+      }
+
+      const safeHistory = Array.isArray(history)
+        ? history
+            .filter(
+              (item: any) =>
+                item &&
+                typeof item === "object" &&
+                typeof item.text === "string"
+            )
+            .map((item: any) => ({
+              role:
+                item.role === "assistant" || item.role === "model"
+                  ? "model"
+                  : "user",
+              text: String(item.text).slice(0, 1500),
+            }))
+        : [];
+
+      const reflection = await reflect(
+        prompt.trim(),
+        safeHistory
+      );
 
       return res.status(200).json({
         success: true,
         reflection,
+        modelUsed: MODEL,
         timestamp: new Date().toISOString(),
       });
     }
 
     if (path === "journal/action-plan") {
-      const { prompt, reflection } = req.body || {};
+      const body = req.body || {};
+      const prompt = body.prompt;
+      const reflection = body.reflection;
 
-      if (!prompt || !reflection) {
+      if (
+        !prompt ||
+        typeof prompt !== "string" ||
+        !prompt.trim()
+      ) {
         return res.status(400).json({
-          error: "Journal entry and reflection are required.",
+          error: "Journal entry is required.",
         });
       }
 
-      const plan = await actionPlan(prompt, reflection);
+      if (
+        !reflection ||
+        typeof reflection !== "string" ||
+        !reflection.trim()
+      ) {
+        return res.status(400).json({
+          error: "Gemini reflection is required.",
+        });
+      }
+
+      const plan = await actionPlan(
+        prompt.trim(),
+        reflection.trim()
+      );
 
       return res.status(200).json({
         success: true,
         actionPlan: plan,
+        modelUsed: MODEL,
         timestamp: new Date().toISOString(),
       });
     }
@@ -153,9 +255,14 @@ export default async function handler(req: any, res: any) {
   } catch (error: any) {
     console.error("API error:", error);
 
+    const message =
+      error?.message ||
+      "Gemini request failed. Please try again.";
+
     return res.status(500).json({
-      error: error?.message || "Internal server error",
-      isApiKeyMissing: String(error?.message || "").includes("GEMINI_API_KEY"),
+      success: false,
+      error: message,
+      isApiKeyMissing: message.includes("GEMINI_API_KEY"),
     });
   }
 }
