@@ -1,7 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 
 const FALLBACK_MODELS = [
-  "gemini-2.5-flash-lite",
+  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash",
 ];
 function getApiKey() {
   const key = process.env.GEMINI_API_KEY;
@@ -33,11 +34,10 @@ async function reflect(prompt: string, history: any[] = []) {
         model,
         contents,
         config: {
-          systemInstruction:
-            "You are an empathetic, supportive and thoughtful personal journaling companion. Give warm, concise reflective feedback. Ask 1-2 gentle follow-up questions or offer a constructive perspective. If the user celebrates, celebrate with them. If stressed, provide calm validation.",
-          temperature: 0.7,
-          maxOutputTokens: 1000,
-        },
+  systemInstruction:
+    "You are an empathetic, supportive and thoughtful personal journaling companion. Give warm, concise reflective feedback. Ask 1-2 gentle follow-up questions or offer a constructive perspective. If the user celebrates, celebrate with them. If stressed, provide calm validation.",
+  maxOutputTokens: 600,
+},
       });
 
       if (response.text) {
