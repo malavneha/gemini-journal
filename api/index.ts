@@ -1,8 +1,8 @@
- export const maxDuration = 60;
+export const maxDuration = 60;
 
-const MODEL = "gemini-2.5-flash-lite";
+import { GoogleGenAI } from "@google/genai";
 
-function getApiKey(): string {
+function getApiKey() {
   const key = process.env.GEMINI_API_KEY;
 
   if (!key) {
@@ -12,239 +12,199 @@ function getApiKey(): string {
   return key;
 }
 
-async function callGemini(
-  prompt: string,
-  history: Array<{ role: string; text: string }> = []
-): Promise<string> {
-  const controller = new AbortController();
+function getErrorStatus(error: any): number | null {
+  return (
+    error?.status ??
+    error?.code ??
+    error?.error?.code ??
+    error?.response?.status ??
+    null
+  );
+}
 
-  // Never allow Gemini to keep the Vercel function waiting.
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 7000);
+function getErrorMessage(error: any): string {
+  return (
+    error?.message ||
+    error?.error?.message ||
+    "Gemini request failed."
+  );
+}
+
+async function reflect(prompt: string, history: any[] = []) {
+  const ai = new GoogleGenAI({
+    apiKey: getApiKey(),
+  });
+
+  const contents = [
+    ...history.slice(-6).map((m) => ({
+      role:
+        m.role === "assistant" || m.role === "model"
+          ? "model"
+          : "user",
+      parts: [
+        {
+          text: String(m.text || "").slice(0, 1500),
+        },
+      ],
+    })),
+
+    {
+      role: "user",
+      parts: [
+        {
+          text: prompt.slice(0, 4000),
+        },
+      ],
+    },
+  ];
 
   try {
-    const contents = [
-      ...history.slice(-4).map((message) => ({
-        role:
-          message.role === "assistant" || message.role === "model"
-            ? "model"
-            : "user",
-        parts: [
-          {
-            text: String(message.text).slice(0, 1200),
-          },
-        ],
-      })),
-      {
-        role: "user",
-        parts: [
-          {
-            text: prompt.slice(0, 5000),
-          },
-        ],
-      },
-    ];
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash-lite",
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(
-        getApiKey()
-      )}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      contents,
+
+      config: {
+        systemInstruction:
+          "You are an empathetic, supportive and thoughtful personal journaling companion. Give warm, concise reflective feedback. Ask one gentle follow-up question or offer one constructive perspective. If the user celebrates, celebrate with them. If stressed, provide calm validation. Keep the response concise.",
+
+        maxOutputTokens: 350,
+
+        temperature: 0.7,
+
+        httpOptions: {
+          timeout: 20000,
+
+          retryOptions: {
+            attempts: 1,
+            httpStatusCodes: [],
+          },
         },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: {
-            parts: [
-              {
-                text:
-                  "You are an empathetic and thoughtful personal journaling companion. " +
-                  "Give warm, concise reflective feedback. " +
-                  "Validate emotions when appropriate, identify one useful insight, " +
-                  "and ask one gentle reflective question. " +
-                  "Keep the response under 150 words.",
-              },
-            ],
-          },
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 300,
-          },
-        }),
-        signal: controller.signal,
-      }
-    );
+      },
+    });
 
-    const rawText = await response.text();
+    if (!response.text) {
+      throw new Error("Gemini returned an empty response.");
+    }
 
-    let data: any;
+    return response.text;
+  } catch (error: any) {
+    const status = getErrorStatus(error);
+    const message = getErrorMessage(error);
 
-    try {
-      data = JSON.parse(rawText);
-    } catch {
+    console.error("Gemini reflection error:", {
+      status,
+      message,
+    });
+
+    if (status === 429 || message.includes("RESOURCE_EXHAUSTED")) {
       throw new Error(
-        `Gemini returned an invalid response (${response.status}).`
+        "Gemini quota is temporarily exhausted. Please wait and try again later."
       );
     }
 
-    if (!response.ok) {
-      const message =
-        data?.error?.message ||
-        `Gemini request failed with status ${response.status}.`;
-
-      const error: any = new Error(message);
-      error.status = response.status;
-      throw error;
+    if (status === 503 || message.includes("UNAVAILABLE")) {
+      throw new Error(
+        "Gemini is temporarily unavailable. Please try again shortly."
+      );
     }
 
-    const text =
-      data?.candidates?.[0]?.content?.parts
-        ?.map((part: any) => part?.text || "")
-        .join("")
-        .trim() || "";
-
-    if (!text) {
-      throw new Error("Gemini returned an empty reflection.");
+    if (status === 408 || message.includes("timeout")) {
+      throw new Error(
+        "Gemini took too long to respond. Please try again."
+      );
     }
 
-    return text;
-  } finally {
-    clearTimeout(timeout);
+    throw new Error(message);
   }
 }
 
-async function createActionPlan(
-  prompt: string,
-  reflection: string
-) {
-  const controller = new AbortController();
-
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 7000);
+async function actionPlan(prompt: string, reflection: string) {
+  const ai = new GoogleGenAI({
+    apiKey: getApiKey(),
+  });
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(
-        getApiKey()
-      )}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash-lite",
+
+      contents: [
+        {
+          role: "user",
+          parts: [
             {
-              role: "user",
-              parts: [
-                {
-                  text:
-                    `Create a concise action plan from this journal entry and reflection.\n\n` +
-                    `Journal:\n${prompt}\n\n` +
-                    `Reflection:\n${reflection}`,
-                },
-              ],
+              text: `Create a concise action plan from this journal entry and reflection.
+
+Journal:
+${prompt.slice(0, 3000)}
+
+Reflection:
+${reflection.slice(0, 3000)}`,
             },
           ],
-          systemInstruction: {
-            parts: [
-              {
-                text:
-                  'Return ONLY valid JSON with exactly these four string keys: ' +
-                  '"keyInsight", "practicalNextStep", "smallActionToday", "goalToRevisitLater".',
-              },
-            ],
-          },
-          generationConfig: {
-            temperature: 0.4,
-            maxOutputTokens: 400,
-            responseMimeType: "application/json",
-          },
-        }),
-        signal: controller.signal,
-      }
-    );
+        },
+      ],
 
-    const rawText = await response.text();
+      config: {
+        systemInstruction:
+          'Return ONLY valid JSON with exactly these keys: "keyInsight", "practicalNextStep", "smallActionToday", "goalToRevisitLater".',
 
-    let data: any;
+        temperature: 0.5,
+
+        maxOutputTokens: 500,
+
+        responseMimeType: "application/json",
+
+        httpOptions: {
+          timeout: 20000,
+
+          retryOptions: {
+            attempts: 1,
+            httpStatusCodes: [],
+          },
+        },
+      },
+    });
+
+    if (!response.text) {
+      throw new Error("No action plan was generated.");
+    }
 
     try {
-      data = JSON.parse(rawText);
+      return JSON.parse(response.text);
     } catch {
+      throw new Error("Gemini returned invalid action-plan JSON.");
+    }
+  } catch (error: any) {
+    const status = getErrorStatus(error);
+    const message = getErrorMessage(error);
+
+    console.error("Gemini action-plan error:", {
+      status,
+      message,
+    });
+
+    if (status === 429 || message.includes("RESOURCE_EXHAUSTED")) {
       throw new Error(
-        `Gemini returned an invalid response (${response.status}).`
+        "Gemini quota is temporarily exhausted. Please wait and try again later."
       );
     }
 
-    if (!response.ok) {
-      throw new Error(
-        data?.error?.message ||
-          `Gemini request failed with status ${response.status}.`
-      );
-    }
-
-    let text =
-      data?.candidates?.[0]?.content?.parts
-        ?.map((part: any) => part?.text || "")
-        .join("")
-        .trim() || "";
-
-    if (!text) {
-      throw new Error("Gemini returned an empty action plan.");
-    }
-
-    if (text.startsWith("```")) {
-      text = text
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-    }
-
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timeout);
+    throw new Error(message);
   }
 }
 
-function getPath(req: any): string {
-  const queryPath = String(req.query?.path || "")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
-
-  if (queryPath) {
-    return queryPath;
-  }
-
-  const urlPath = String(req.url || "")
-    .split("?")[0]
-    .replace(/^\/api\/?/, "")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
-
-  return urlPath;
-}
-
-export default async function handler(
-  req: any,
-  res: any
-) {
+export default async function handler(req: any, res: any) {
   try {
-    const path = getPath(req);
+    const path = String(req.query?.path || "").replace(/^\/+/, "");
 
-    // HEALTH CHECK
+    // Health check
     if (req.method === "GET" && path === "health") {
       return res.status(200).json({
         status: "ok",
         app: "Personal Gemini Journal",
-        geminiConfigured: Boolean(
-          process.env.GEMINI_API_KEY
-        ),
-        model: MODEL,
+        geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+        model: "gemini-3.5-flash-lite",
       });
     }
 
@@ -254,139 +214,81 @@ export default async function handler(
       });
     }
 
-    // REFLECTION
+    // Journal reflection
     if (path === "journal/reflect") {
-      const body = req.body || {};
+      const { prompt, history } = req.body || {};
 
-      const prompt = body.prompt;
-      const history = body.history;
-
-      if (
-        !prompt ||
-        typeof prompt !== "string" ||
-        !prompt.trim()
-      ) {
+      if (!prompt || typeof prompt !== "string") {
         return res.status(400).json({
-          error:
-            "A valid journal entry prompt is required.",
+          success: false,
+          error: "A valid journal entry prompt is required.",
         });
       }
 
-      const safeHistory = Array.isArray(history)
-        ? history
-            .filter(
-              (item: any) =>
-                item &&
-                typeof item.text === "string"
-            )
-            .map((item: any) => ({
-              role:
-                item.role === "assistant" ||
-                item.role === "model"
-                  ? "model"
-                  : "user",
-              text: String(item.text).slice(
-                0,
-                1200
-              ),
-            }))
-        : [];
+      const reflection = await reflect(
+        prompt.trim(),
+        Array.isArray(history) ? history : []
+      );
 
-      try {
-        const reflection = await callGemini(
-          prompt.trim(),
-          safeHistory
-        );
-
-        return res.status(200).json({
-          success: true,
-          reflection,
-          modelUsed: MODEL,
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error: any) {
-        if (error?.name === "AbortError") {
-          return res.status(504).json({
-            success: false,
-            error:
-              "Gemini took too long to respond. Please try again.",
-          });
-        }
-
-        throw error;
-      }
+      return res.status(200).json({
+        success: true,
+        reflection,
+        timestamp: new Date().toISOString(),
+        modelUsed: "gemini-3.5-flash-lite",
+      });
     }
 
-    // ACTION PLAN
+    // Action plan
     if (path === "journal/action-plan") {
-      const body = req.body || {};
-
-      const prompt = body.prompt;
-      const reflection = body.reflection;
+      const { prompt, reflection } = req.body || {};
 
       if (
         !prompt ||
         typeof prompt !== "string" ||
-        !prompt.trim()
-      ) {
-        return res.status(400).json({
-          error: "Journal entry is required.",
-        });
-      }
-
-      if (
         !reflection ||
-        typeof reflection !== "string" ||
-        !reflection.trim()
+        typeof reflection !== "string"
       ) {
         return res.status(400).json({
-          error: "Reflection is required.",
+          success: false,
+          error: "Journal entry and reflection are required.",
         });
       }
 
-      try {
-        const actionPlan = await createActionPlan(
-          prompt.trim(),
-          reflection.trim()
-        );
+      const plan = await actionPlan(prompt, reflection);
 
-        return res.status(200).json({
-          success: true,
-          actionPlan,
-          modelUsed: MODEL,
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error: any) {
-        if (error?.name === "AbortError") {
-          return res.status(504).json({
-            success: false,
-            error:
-              "Gemini took too long to create the action plan.",
-          });
-        }
-
-        throw error;
-      }
+      return res.status(200).json({
+        success: true,
+        actionPlan: plan,
+        timestamp: new Date().toISOString(),
+      });
     }
 
     return res.status(404).json({
+      success: false,
       error: `Unknown API route: ${path}`,
     });
   } catch (error: any) {
     console.error("API error:", error);
 
+    const message = getErrorMessage(error);
+    const status = getErrorStatus(error);
+
+    if (
+      status === 429 ||
+      message.includes("quota") ||
+      message.includes("RESOURCE_EXHAUSTED")
+    ) {
+      return res.status(429).json({
+        success: false,
+        error:
+          "Gemini quota is temporarily exhausted. Please wait and try again later.",
+      });
+    }
+
     return res.status(500).json({
       success: false,
-      error:
-        error?.message ||
-        "Gemini request failed.",
-      isApiKeyMissing: String(
-        error?.message || ""
-      ).includes("GEMINI_API_KEY"),
+      error: message || "Internal server error.",
+      isApiKeyMissing: message.includes("GEMINI_API_KEY"),
     });
   }
 }
-                
-      
-      
-        
