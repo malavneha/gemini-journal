@@ -97,7 +97,10 @@ export default async function handler(
   res: VercelResponse
 ) {
   try {
-    const path = String(req.query.path || "").replace(/^\/+/, "");
+    const path = String(req.url || "")
+  .split("?")[0]
+  .replace(/^\/api\/?/, "")
+  .replace(/^\/+/, "");
 
     if (req.method === "GET" && path === "health") {
       return res.status(200).json({
