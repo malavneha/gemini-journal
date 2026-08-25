@@ -46,9 +46,15 @@ async function reflect(prompt: string, history: any[] = []) {
       if (response.text) {
         return response.text;
       }
-    } catch (e) {
-      lastError = e;
-    }
+    } catch (e: any) {
+  lastError = e;
+
+  const status = e?.status ?? e?.code;
+
+  if (status === 503 || status === 429) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+}
   }
 
   throw lastError || new Error("Gemini generation failed.");
