@@ -19,7 +19,6 @@ export default async function handler(req: any, res: any) {
     if (!apiKey) {
       return res.status(500).json({
         error: "GEMINI_API_KEY is not configured in Vercel.",
-        isApiKeyMissing: true,
       });
     }
 
@@ -44,7 +43,7 @@ export default async function handler(req: any, res: any) {
       contents,
       config: {
         systemInstruction:
-          "You are an empathetic, supportive, and thoughtful personal journaling companion. Provide warm, grounding and reflective feedback. Ask 1-2 gentle open-ended questions or offer a constructive perspective. Keep the response concise, supportive, readable, and well-formatted with markdown.",
+          "You are an empathetic, supportive personal journaling companion. Give warm, thoughtful, concise reflections. Offer a constructive perspective and 1-2 gentle questions when appropriate. Use readable markdown.",
         temperature: 0.7,
         maxOutputTokens: 1000,
       },
@@ -67,7 +66,6 @@ export default async function handler(req: any, res: any) {
 
     return res.status(500).json({
       error: error?.message || "Failed to generate Gemini reflection.",
-      isApiKeyMissing: false,
     });
   }
 }
