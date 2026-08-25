@@ -1,11 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 
 const FALLBACK_MODELS = [
-  "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
-  "gemini-flash-latest",
 ];
-
 function getApiKey() {
   const key = process.env.GEMINI_API_KEY;
   if (!key) {
