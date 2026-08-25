@@ -243,3 +243,7 @@ app.post("/api/journal/action-plan", async (req, res) => {
 
 export default app;
 
+if (process.env.VERCEL !== "1") {
+  startServer();
+}
+
