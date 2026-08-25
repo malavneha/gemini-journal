@@ -1,5 +1,4 @@
 import { GoogleGenAI } from "@google/genai";
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 const FALLBACK_MODELS = [
   "gemini-2.5-flash",
@@ -92,15 +91,9 @@ ${reflection}`,
   return JSON.parse(response.text);
 }
 
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse
-) {
+export default async function handler(req: any, res: any) {
   try {
-    const path = String(req.url || "")
-  .split("?")[0]
-  .replace(/^\/api\/?/, "")
-  .replace(/^\/+/, "");
+    const path = String(req.query?.path || "").replace(/^\/+/, "");
 
     if (req.method === "GET" && path === "health") {
       return res.status(200).json({
