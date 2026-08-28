@@ -9,8 +9,8 @@ https://gemini-journal-beta.vercel.app
 
 ###💌screenshot
 
-[screenshot](demo.jpg)
-[screenshot](demo..jpg)
+1) [screenshot](demo.jpg)
+2) [screenshot](demo..jpg)
 
 
 ## 🛡️ Security & Threat Model Implementation
