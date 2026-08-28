@@ -196,66 +196,137 @@ async function actionPlan(prompt: string, reflection: string) {
     apiKey: getApiKey(),
   });
 
-  try {
-    const result = await generateWithFallback(ai, {
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `Create a concise action plan from this journal entry and reflection.
+  const models = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+  ];
+
+  let lastError: any = null;
+
+  for (const model of models) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `Create a concise action plan from this journal entry and reflection.
 
 Journal:
 ${prompt.slice(0, 3000)}
 
 Reflection:
 ${reflection.slice(0, 3000)}`,
-            },
-          ],
+              },
+            ],
+          },
+        ],
+
+        config: {
+          systemInstruction: `
+Return ONLY a valid JSON object.
+
+Do not use markdown.
+Do not use code fences.
+Do not add explanations before or after the JSON.
+
+The JSON must contain exactly these four string fields:
+
+{
+  "keyInsight": "...",
+  "practicalNextStep": "...",
+  "smallActionToday": "...",
+  "goalToRevisitLater": "..."
+}
+          `,
+
+          temperature: 0.3,
+          maxOutputTokens: 500,
+
+          responseMimeType: "application/json",
+
+          httpOptions: {
+            timeout: 20000,
+          },
         },
-      ],
+      });
 
-      config: {
-        systemInstruction:
-          'Return ONLY valid JSON with exactly these keys: "keyInsight", "practicalNextStep", "smallActionToday", "goalToRevisitLater".',
+      if (!response.text) {
+        throw new Error("No action plan was generated.");
+      }
 
-        maxOutputTokens: 500,
+      let cleaned = response.text.trim();
 
-        responseMimeType: "application/json",
-      },
-    });
+      // Remove accidental markdown fences if Gemini adds them.
+      cleaned = cleaned
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
 
-    try {
-      return {
-        plan: JSON.parse(result.response.text),
-        model: result.model,
-      };
-    } catch {
-      throw new Error("Gemini returned invalid action-plan JSON.");
+      const parsed = JSON.parse(cleaned);
+
+      const requiredKeys = [
+        "keyInsight",
+        "practicalNextStep",
+        "smallActionToday",
+        "goalToRevisitLater",
+      ];
+
+      const valid =
+        parsed &&
+        typeof parsed === "object" &&
+        requiredKeys.every(
+          (key) => typeof parsed[key] === "string"
+        );
+
+      if (!valid) {
+        throw new Error(
+          "Gemini returned an action plan with an invalid structure."
+        );
+      }
+
+      console.log(`Action plan succeeded with model: ${model}`);
+
+      return parsed;
+    } catch (error: any) {
+      lastError = error;
+
+      console.error(`Action plan failed with ${model}:`, {
+        status: getErrorStatus(error),
+        message: getErrorMessage(error),
+      });
+
+      const status = getErrorStatus(error);
+      const message = getErrorMessage(error);
+
+      // Try another model for temporary Gemini failures.
+      if (
+        status === 503 ||
+        status === 429 ||
+        message.includes("UNAVAILABLE") ||
+        message.includes("RESOURCE_EXHAUSTED")
+      ) {
+        continue;
+      }
+
+      // If JSON parsing failed, try another model too.
+      if (
+        message.includes("JSON") ||
+        message.includes("action plan")
+      ) {
+        continue;
+      }
+
+      throw error;
     }
-  } catch (error: any) {
-    const status = getErrorStatus(error);
-    const message = getErrorMessage(error);
-
-    console.error("Gemini action-plan error:", {
-      status,
-      message,
-    });
-
-    if (status === 429 || message.includes("RESOURCE_EXHAUSTED")) {
-      throw new Error(
-        "Gemini quota is temporarily exhausted. Please wait and try again later."
-      );
-    }
-
-    if (status === 503 || message.includes("UNAVAILABLE")) {
-      throw new Error(
-        "Gemini is temporarily unavailable. Please try again shortly."
-      );
-    }
-
-    throw new Error(message);
   }
+
+  throw lastError || new Error("All Gemini action-plan attempts failed.");
 }
 
 export default async function handler(req: any, res: any) {
