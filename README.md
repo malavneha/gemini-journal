@@ -121,5 +121,9 @@ gcloud run services update personal-gemini-journal \
    - Click the Sign Out icon in the top navigation bar.
    - Verify that the protected journal feed is cleared and returns to the Sign-In screen.
   
-### developer
-Dr Neha Malav
+### Developer
+
+Dr Neha Malav|MBBS|Ai|Machine learning|gen ai|data anlytics
+linkdin::-
+
+https://www.linkedin.com/in/dr-neha-malav-743a25332
