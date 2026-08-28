@@ -3,6 +3,10 @@
 A clean, mobile-friendly journaling application built with React, Vite, Express, Firebase Authentication (Google Sign-In), Cloud Firestore, and the Google Gemini API (`@google/genai`).
 
 ---
+###🚀live demo
+
+https://gemini-journal-beta.vercel.app
+
 
 ## 🛡️ Security & Threat Model Implementation
 
