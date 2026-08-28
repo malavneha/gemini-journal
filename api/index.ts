@@ -391,12 +391,11 @@ export default async function handler(req: any, res: any) {
 
       const planResult = await actionPlan(prompt, reflection);
 
-      return res.status(200).json({
-        success: true,
-        actionPlan: planResult.plan,
-        modelUsed: planResult.model,
-        timestamp: new Date().toISOString(),
-      });
+return res.status(200).json({
+  success: true,
+  actionPlan: planResult,
+  timestamp: new Date().toISOString(),
+});
     }
 
     return res.status(404).json({
