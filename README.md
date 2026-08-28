@@ -8,7 +8,7 @@ A clean, mobile-friendly journaling application built with React, Vite, Express,
 https://gemini-journal-beta.vercel.app
 
 ###💌screenshot
-[screenshot](demo)
+[screenshot](demo.jpg)
 
 ## 🛡️ Security & Threat Model Implementation
 
