@@ -30,6 +30,92 @@ function getErrorMessage(error: any): string {
   );
 }
 
+/*
+ * Gemini can temporarily return 503 when a model is busy.
+ * Instead of failing immediately, try another stable model.
+ */
+const GEMINI_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+];
+
+function isTemporaryGeminiError(error: any): boolean {
+  const status = getErrorStatus(error);
+  const message = getErrorMessage(error).toUpperCase();
+
+  return (
+    status === 503 ||
+    status === 429 ||
+    message.includes("UNAVAILABLE") ||
+    message.includes("RESOURCE_EXHAUSTED") ||
+    message.includes("HIGH DEMAND") ||
+    message.includes("OVERLOADED")
+  );
+}
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function generateWithFallback(
+  ai: GoogleGenAI,
+  request: any
+) {
+  let lastError: any = null;
+
+  for (let i = 0; i < GEMINI_MODELS.length; i++) {
+    const model = GEMINI_MODELS[i];
+
+    try {
+      console.log(`Trying Gemini model: ${model}`);
+
+      const response = await ai.models.generateContent({
+        ...request,
+        model,
+        config: {
+          ...(request.config || {}),
+          httpOptions: {
+            timeout: 20000,
+          },
+        },
+      });
+
+      if (!response.text) {
+        throw new Error("Gemini returned an empty response.");
+      }
+
+      console.log(`Gemini succeeded with model: ${model}`);
+
+      return {
+        response,
+        model,
+      };
+    } catch (error: any) {
+      lastError = error;
+
+      const status = getErrorStatus(error);
+      const message = getErrorMessage(error);
+
+      console.error(`Gemini ${model} failed:`, {
+        status,
+        message,
+      });
+
+      if (!isTemporaryGeminiError(error)) {
+        throw error;
+      }
+
+      if (i < GEMINI_MODELS.length - 1) {
+        await sleep(500);
+      }
+    }
+  }
+
+  throw lastError || new Error("All Gemini models failed.");
+}
+
 async function reflect(prompt: string, history: any[] = []) {
   const ai = new GoogleGenAI({
     apiKey: getApiKey(),
@@ -59,9 +145,7 @@ async function reflect(prompt: string, history: any[] = []) {
   ];
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash-lite",
-
+    const result = await generateWithFallback(ai, {
       contents,
 
       config: {
@@ -69,25 +153,13 @@ async function reflect(prompt: string, history: any[] = []) {
           "You are an empathetic, supportive and thoughtful personal journaling companion. Give warm, concise reflective feedback. Ask one gentle follow-up question or offer one constructive perspective. If the user celebrates, celebrate with them. If stressed, provide calm validation. Keep the response concise.",
 
         maxOutputTokens: 350,
-
-        temperature: 0.7,
-
-        httpOptions: {
-          timeout: 20000,
-
-          retryOptions: {
-            attempts: 1,
-            httpStatusCodes: [],
-          },
-        },
       },
     });
 
-    if (!response.text) {
-      throw new Error("Gemini returned an empty response.");
-    }
-
-    return response.text;
+    return {
+      text: result.response.text,
+      model: result.model,
+    };
   } catch (error: any) {
     const status = getErrorStatus(error);
     const message = getErrorMessage(error);
@@ -109,7 +181,7 @@ async function reflect(prompt: string, history: any[] = []) {
       );
     }
 
-    if (status === 408 || message.includes("timeout")) {
+    if (status === 408 || message.toLowerCase().includes("timeout")) {
       throw new Error(
         "Gemini took too long to respond. Please try again."
       );
@@ -125,9 +197,7 @@ async function actionPlan(prompt: string, reflection: string) {
   });
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash-lite",
-
+    const result = await generateWithFallback(ai, {
       contents: [
         {
           role: "user",
@@ -149,29 +219,17 @@ ${reflection.slice(0, 3000)}`,
         systemInstruction:
           'Return ONLY valid JSON with exactly these keys: "keyInsight", "practicalNextStep", "smallActionToday", "goalToRevisitLater".',
 
-        temperature: 0.5,
-
         maxOutputTokens: 500,
 
         responseMimeType: "application/json",
-
-        httpOptions: {
-          timeout: 20000,
-
-          retryOptions: {
-            attempts: 1,
-            httpStatusCodes: [],
-          },
-        },
       },
     });
 
-    if (!response.text) {
-      throw new Error("No action plan was generated.");
-    }
-
     try {
-      return JSON.parse(response.text);
+      return {
+        plan: JSON.parse(result.response.text),
+        model: result.model,
+      };
     } catch {
       throw new Error("Gemini returned invalid action-plan JSON.");
     }
@@ -190,6 +248,12 @@ ${reflection.slice(0, 3000)}`,
       );
     }
 
+    if (status === 503 || message.includes("UNAVAILABLE")) {
+      throw new Error(
+        "Gemini is temporarily unavailable. Please try again shortly."
+      );
+    }
+
     throw new Error(message);
   }
 }
@@ -204,7 +268,7 @@ export default async function handler(req: any, res: any) {
         status: "ok",
         app: "Personal Gemini Journal",
         geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
-        model: "gemini-3.5-flash-lite",
+        models: GEMINI_MODELS,
       });
     }
 
@@ -225,16 +289,16 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      const reflection = await reflect(
+      const reflectionResult = await reflect(
         prompt.trim(),
         Array.isArray(history) ? history : []
       );
 
       return res.status(200).json({
         success: true,
-        reflection,
+        reflection: reflectionResult.text,
         timestamp: new Date().toISOString(),
-        modelUsed: "gemini-3.5-flash-lite",
+        modelUsed: reflectionResult.model,
       });
     }
 
@@ -254,11 +318,12 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      const plan = await actionPlan(prompt, reflection);
+      const planResult = await actionPlan(prompt, reflection);
 
       return res.status(200).json({
         success: true,
-        actionPlan: plan,
+        actionPlan: planResult.plan,
+        modelUsed: planResult.model,
         timestamp: new Date().toISOString(),
       });
     }
@@ -292,3 +357,8 @@ export default async function handler(req: any, res: any) {
     });
   }
 }
+
+        
+
+        
+     
