@@ -117,3 +117,6 @@ gcloud run services update personal-gemini-journal \
 6. **Sign Out Test**:
    - Click the Sign Out icon in the top navigation bar.
    - Verify that the protected journal feed is cleared and returns to the Sign-In screen.
+  
+### developer
+Dr Neha Malav
